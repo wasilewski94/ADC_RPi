@@ -31,7 +31,6 @@ dev_t my_dev=0;
 struct cdev * my_cdev = NULL;
 #define PROC_BLOCK_SIZE (3*1024)
 static struct class *kw_adc_class = NULL;
-static float lsb = 0.001;
 
 struct spi_device *spi_adc_dev = NULL;
 // struct spi_transfer * adc_message = NULL;
