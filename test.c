@@ -37,11 +37,26 @@ int main(int argc, char* argv[]) {
       exit(1);
     }
   
-    bufor[0] = 0;
-    bufor[1] = 0;
-    bufor[2] = 0;
+    /*
+   * Pomiar single-ended i unipolar, wybor kanalu:
+  format komendy: 
+  1XXX1111
+   000 - CH0 --> 8f
+   100 - CH1 --> cf 
+   001 - CH2 --> 9f
+   101 - CH3 --> df
+   010 - CH4 --> af
+   110 - CH5 --> ef
+   011 - CH6 --> bf
+   111 - CH7 --> ff
+   */
+  
     
     while(1) {
+    bufor[0] = 0x9f;
+    bufor[1] = 0;
+    bufor[2] = 0;
+      
       int ret = ioctl(fd, SPI_IOC_RD, bufor);
       
       signed long value;
