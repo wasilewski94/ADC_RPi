@@ -18,7 +18,6 @@
 #include <asm/uaccess.h>
 #include <linux/types.h>
 #include <linux/ioctl.h>
-#include <linux/spi/spidev.h>
 
 
 #define SPI_IOC_MAGIC			'k'
@@ -33,8 +32,7 @@ struct cdev * my_cdev = NULL;
 static struct class *kw_adc_class = NULL;
 
 struct spi_device *spi_adc_dev = NULL;
-// struct spi_transfer * adc_message = NULL;
-// EXPORT_SYMBOL(adc_message);
+
 EXPORT_SYMBOL(spi_adc_dev);
 
 static int kw_adc_open(struct inode *inode, struct file *file)
@@ -46,15 +44,12 @@ static int kw_adc_open(struct inode *inode, struct file *file)
 static int kw_adc_release(struct inode *inode, struct file *file)
 {
   printk(KERN_ALERT "no to na razie");
-	return 0;
+  return 0;
 }
 
 static int kw_adc_probe(struct spi_device *spi)
 {	
-	// w funkcji probe musimy umiec rozroznic urzadzenia ktore sa podlaczone
-	// beda one mialy inne numer minor
-	
-  
+
 	printk(KERN_ALERT "Probe startuje!");
 	int retval = -ENOMEM;
 	
@@ -113,7 +108,11 @@ if (err)
 	
 	
 if (cmd == SPI_IOC_RD){
-	  
+	
+
+	//definicja struktury spi_transfer
+
+  
 	uint8_t* tx = kmalloc(3, GFP_KERNEL);
 	if(!tx)
 	   goto err;
@@ -126,7 +125,8 @@ if (cmd == SPI_IOC_RD){
 	
 	printk(KERN_ALERT "alokacja rx!");
 	
-	tx[0] = 143;
+	
+	tx[0] = 0x00;
 	tx[1] = 0x00;
 	tx[2] = 0x00;
 	printk(KERN_ALERT "wpisano wartosci do bufora tx!");
@@ -136,7 +136,6 @@ if (cmd == SPI_IOC_RD){
 	rx[2] = 0x00;
 	printk(KERN_ALERT "wpisano wartosci do bufora rx!");
 	
-	//definicja struktury spi_transfer
 	struct spi_transfer *t = kmalloc(sizeof(struct spi_transfer), GFP_KERNEL);
 	if(!t)
 	   goto err;
@@ -150,7 +149,6 @@ if (cmd == SPI_IOC_RD){
 	if (!msg_buf)
 	    return -ENOMEM;
 	
-	printk(KERN_ALERT "alokacja tablicy transferow!");
 		
 	msg_buf[0].tx_buf=tx;
 	printk(KERN_ALERT "wpisanie wartosci tx");
@@ -159,9 +157,11 @@ if (cmd == SPI_IOC_RD){
 	msg_buf[0].len = 3;
 	printk(KERN_ALERT "wpisanie wartosci len!");
 	
+	retval = __copy_from_user(tx, (uint8_t __user *)arg, 3);
 	
 	retval = spi_sync_transfer(spi_adc_dev, msg_buf, 1);
 	printk(KERN_ALERT "wykonano transfer!");
+	printk("tx=%x %x %x\n",tx[0], tx[1], tx[2]);
 	printk("rx=%x %x %x\n",rx[0], rx[1], rx[2]);
 	
 	printk(KERN_ALERT "wpisanie wartosci rx!");
@@ -169,10 +169,25 @@ if (cmd == SPI_IOC_RD){
 	//wysylam do przestrzeni uzytkownika adres bufora
 	retval = __copy_to_user((uint8_t __user *)arg, rx, 3);
 	
+	//czyszcze pamiec
+	  if(rx)
+	    kfree(rx);
+	  if(tx)
+	    kfree(tx);
+	  if(t)
+	    kfree(t);
+	  if(msg_buf)
+	    kfree(msg_buf);
+	
+	
 	if (retval < 0) {
 	printk("spi_sync_transfer failed!\n");
 	
-	 err:
+	
+	
+	
+	
+	err:
 	  if(rx)
 	    kfree(rx);
 	  if(tx)
@@ -184,11 +199,10 @@ if (cmd == SPI_IOC_RD){
 	
 	return -ENOMEM;
 	}
+	
         return retval;  
 }
-   
-	//mutex_unlock(&spiadc->buf_lock);
-	//spi_dev_put(spi);
+
 	
 }
 
@@ -287,20 +301,4 @@ module_exit(kw_adc_exit);
 MODULE_DESCRIPTION("Minimal SPI ADC driver");
 MODULE_AUTHOR("Krzysztof Wasilewski");
 MODULE_LICENSE("GPL v2");
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
