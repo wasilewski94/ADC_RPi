@@ -95,7 +95,7 @@ int main(int argc, char* argv[]) {
     }
     putchar('\n');
     printf("Skonczylem czekac\n");
-    fflush();
+    fflush(stdout);
 //     wylaczamy timer
     ret = ioctl(fd, ADC_STOP, 0);
     
