@@ -63,7 +63,9 @@ static struct class *kw_adc_class = NULL;
 
 int kw_adc_open(struct inode *inode, struct file *filp)
 {
- printk("funkcja open zostala wywolana");
+  printk("funkcja open zostala wywolana");
+ 
+  hrtimer_init(&dev->adc_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
   
  //todo sprawdzic czy nie byl juz otwarty
 //   printk("alokowanie bufora kfifo");
@@ -74,6 +76,7 @@ int kw_adc_open(struct inode *inode, struct file *filp)
 // SPI completion routines
 void adc_complete(void * context)
 {
+  printk("Debug: skonczony transfer spi\n");
   if(atomic_dec_and_test(&daq_flag)) {
     //If the result is zero, then both SPI messages are serviced
     //We may copy the results
@@ -83,7 +86,7 @@ void adc_complete(void * context)
     if(dev->rx[0] != 0)
       printk("MCP3201 error - first byte of transfer is not 0, ignoring results.");
     else {
-      kfifo_in(adc_kfifo, (dev->rx+1), 2);
+      kfifo_in(&adc_kfifo, (dev->rx+1), 2);
     //We should check for the free space... I'll correct it later...
       wake_up_interruptible(&read_queue);
     }
@@ -203,7 +206,6 @@ switch(cmd){
  
   case ADC_SET: //Set sampling frequency
      dev->adc_sampling_period =  ktime_set(0, arg);
-     hrtimer_init(&dev->adc_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
      dev->adc_timer.function = adc_timer_proc;
      printk(KERN_ALERT "ustawiono okres probkowania: %lu", arg);
      //file->private_data = dev;

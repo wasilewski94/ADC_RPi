@@ -91,6 +91,7 @@ int main(int argc, char* argv[]) {
     int c = 5;
     while(c--) {
       putchar('.');
+      sleep(1);
     }
     putchar('\n');
     printf("Skonczylem czekac\n");
