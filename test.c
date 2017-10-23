@@ -88,8 +88,13 @@ int main(int argc, char* argv[]) {
           printf("Value of errno: %d\n", errno);
           perror("open perror:");
     }  
-    
-    sleep(3);
+    int c = 5;
+    while(c--) {
+      putchar('.');
+    }
+    putchar('\n');
+    printf("Skonczylem czekac\n");
+    fflush();
 //     wylaczamy timer
     ret = ioctl(fd, ADC_STOP, 0);
     

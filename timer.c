@@ -66,15 +66,7 @@ int kw_adc_open(struct inode *inode, struct file *filp)
  printk("funkcja open zostala wywolana");
   
  //todo sprawdzic czy nie byl juz otwarty
-//   kfifo_buffer = kmalloc(1024, GFP_KERNEL);
 //   printk("alokowanie bufora kfifo");
-//   struct kfifo *kfif;
-//   int ret = kfifo_init(kfif, kfifo_buffer, 1024);//todo czy  nie wyciek pamieci
-//   
-//   if (!ret) {
-//     printk("nie udalo sie zaalokowac kfifo");
-//     return -ENOMEM;
-//   }
 //     printk("udalo sie zaalokowac kfifo");
   return 0;
 }
@@ -82,20 +74,20 @@ int kw_adc_open(struct inode *inode, struct file *filp)
 // SPI completion routines
 void adc_complete(void * context)
 {
-//   if(atomic_dec_and_test(&daq_flag)) {
-//     //If the result is zero, then both SPI messages are serviced
-//     //We may copy the results
-//     //I do not clean up the bits returned by MCP3201
-//     //The user application has to do it...
-//     //adc_buf[0] |= 0x80;
-//     if(dev->rx[0] != 0)
-//       printk("MCP3201 error - first byte of transfer is not 0, ignoring results.");
-//     else {
-//       kfifo_in(adc_kfifo, (dev->rx+1), 2);
-//     //We should check for the free space... I'll correct it later...
-//       wake_up_interruptible(&read_queue);
-//     }
-//   }
+  if(atomic_dec_and_test(&daq_flag)) {
+    //If the result is zero, then both SPI messages are serviced
+    //We may copy the results
+    //I do not clean up the bits returned by MCP3201
+    //The user application has to do it...
+    //adc_buf[0] |= 0x80;
+    if(dev->rx[0] != 0)
+      printk("MCP3201 error - first byte of transfer is not 0, ignoring results.");
+    else {
+      kfifo_in(adc_kfifo, (dev->rx+1), 2);
+    //We should check for the free space... I'll correct it later...
+      wake_up_interruptible(&read_queue);
+    }
+  }
 }
 
 //HRtimer interrupt routine
@@ -106,7 +98,6 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
   struct max1202 *dev = container_of(my_timer, struct max1202, adc_timer);
   if (dev == NULL)
      return 0;
-  /*
   
   //initialization of the spi_messages
   spi_message_init(dev->adc1_msg);
@@ -119,7 +110,7 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
   //submission of the messages
   spi_async(dev->adc_dev, dev->adc1_msg);
   //mark the fact, that messages are submited
-  atomic_set(&daq_flag,1); */
+  atomic_set(&daq_flag,1);
   //rearming of the timer
   hrtimer_forward(my_timer, my_timer->_softexpires, dev->adc_sampling_period);
   return HRTIMER_RESTART;
@@ -129,7 +120,7 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
 int kw_adc_release(struct inode *inode, struct file *filp)
 {
   //Make sure, that daq_timer is already switched off
-  //hrtimer_cancel(&dev->adc_timer);
+  hrtimer_try_to_cancel(&dev->adc_timer);
   //Make sure that the spi_messages are serviced
   while (atomic_read(&daq_flag)) {};
   //Now we can be sure, that the spi_messages are serviced
@@ -219,14 +210,13 @@ switch(cmd){
      return 0; 
   
   case ADC_START:
-    //adc_sampling_period = ktime_set(0, arg);
     hrtimer_start(&dev->adc_timer, dev->adc_sampling_period, HRTIMER_MODE_REL);
     printk(KERN_ALERT "rozpoczecie konwersji");
     //file->private_data = dev;
     return 0;
     
    case ADC_STOP: //Stop acquisition
-   hrtimer_cancel(&dev->adc_timer);
+   hrtimer_try_to_cancel(&dev->adc_timer);
    printk(KERN_ALERT "koniec konwersji!");
    //file->private_data = dev;
    return 0;
