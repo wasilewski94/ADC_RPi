@@ -31,16 +31,18 @@
 
 #define DEVICE_NAME "kw_adc"
 
+/* fifo size in elements (bytes) */
+#define FIFO_SIZE	32
+
 DECLARE_WAIT_QUEUE_HEAD (read_queue);
 
 //ADC buffer kfifo
 struct kfifo adc_kfifo;
 DEFINE_SPINLOCK(adc_kfifo_lock);
 atomic_t daq_flag = ATOMIC_INIT(0);
-
+unsigned char *kfifo_buffer; 
 
 struct max1202 {
-   
   struct spi_transfer	   adc1_xfer[1];
   struct spi_message	   adc1_msg[1];
   struct cdev              *my_cdev;
@@ -48,76 +50,76 @@ struct max1202 {
   u8			   rx[3];
   struct hrtimer 	   adc_timer;
   struct spi_device 	   *adc_dev;
-  ktime_t  adc_sampling_period;
-  //ADC buffer kfifo
-  //struct kfifo *adc_kfifo = NULL; //It seems, that the buffer must be kmalloc allocated.
+  ktime_t  		   adc_sampling_period;
+//   struct kfifo 		   adc_kfifo; //It seems, that the buffer must be kmalloc allocated.
 };
 #define to_max1202_dev(d) container_of(d, struct max1202, dev)
 
-struct hrtimer adc_timer;
-ktime_t  adc_sampling_period;
+struct max1202 *dev; // dev pointer
+
 dev_t my_dev=0;
-struct cdev * my_cdev = NULL;
 #define PROC_BLOCK_SIZE (3*1024)
 static struct class *kw_adc_class = NULL;
-unsigned char *adc_tx_buf;
-unsigned char *adc_rx_buf;
 
 int kw_adc_open(struct inode *inode, struct file *filp)
 {
- printk("funkcja open została wywołana");
+ printk("funkcja open zostala wywolana");
   
-  if (&adc_kfifo) {
-    //Device is already opened
-    return -EINVAL;
-  }
-  int ret = kfifo_alloc(&adc_kfifo, 10000, GFP_KERNEL);//todo czy  nie wyciek pamieci
-  if (!ret) {
-    printk("nie udalo sie zaalokowac kfifo");
-    return -ENOMEM;
-  }
+ //todo sprawdzic czy nie byl juz otwarty
+//   kfifo_buffer = kmalloc(1024, GFP_KERNEL);
+//   printk("alokowanie bufora kfifo");
+//   struct kfifo *kfif;
+//   int ret = kfifo_init(kfif, kfifo_buffer, 1024);//todo czy  nie wyciek pamieci
+//   
+//   if (!ret) {
+//     printk("nie udalo sie zaalokowac kfifo");
+//     return -ENOMEM;
+//   }
+//     printk("udalo sie zaalokowac kfifo");
   return 0;
 }
 
 // SPI completion routines
 void adc_complete(void * context)
 {
-  if(atomic_dec_and_test(&daq_flag)) {
-    //If the result is zero, then both SPI messages are serviced
-    //We may copy the results
-    //I do not clean up the bits returned by MCP3201
-    //The user application has to do it...
-    //adc_buf[0] |= 0x80;
-    if(adc_rx_buf[0] != 0)
-      printk("MCP3201 error - first byte of transfer is not 0, ignoring results.");
-    else {
-      kfifo_in(&adc_kfifo,adc_rx_buf+1,2);
-    //We should check for the free space... I'll correct it later...
-      wake_up_interruptible(&read_queue);
-    }
-  }
+//   if(atomic_dec_and_test(&daq_flag)) {
+//     //If the result is zero, then both SPI messages are serviced
+//     //We may copy the results
+//     //I do not clean up the bits returned by MCP3201
+//     //The user application has to do it...
+//     //adc_buf[0] |= 0x80;
+//     if(dev->rx[0] != 0)
+//       printk("MCP3201 error - first byte of transfer is not 0, ignoring results.");
+//     else {
+//       kfifo_in(adc_kfifo, (dev->rx+1), 2);
+//     //We should check for the free space... I'll correct it later...
+//       wake_up_interruptible(&read_queue);
+//     }
+//   }
 }
 
 //HRtimer interrupt routine
 enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
 {
   printk(KERN_ALERT "obsluga przerwania timera");  
+  
   struct max1202 *dev = container_of(my_timer, struct max1202, adc_timer);
   if (dev == NULL)
      return 0;
+  /*
   
   //initialization of the spi_messages
   spi_message_init(dev->adc1_msg);
   memset(dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
-  dev->adc1_xfer->tx_buf  = adc_tx_buf;
-  dev->adc1_xfer->rx_buf  = adc_rx_buf;
+  dev->adc1_xfer->tx_buf  = dev->tx;
+  dev->adc1_xfer->rx_buf  = dev->rx;
   dev->adc1_xfer->len = 3;
   spi_message_add_tail(dev->adc1_xfer, dev->adc1_msg);
   dev->adc1_msg->complete = adc_complete;
   //submission of the messages
   spi_async(dev->adc_dev, dev->adc1_msg);
   //mark the fact, that messages are submited
-  atomic_set(&daq_flag,1); 
+  atomic_set(&daq_flag,1); */
   //rearming of the timer
   hrtimer_forward(my_timer, my_timer->_softexpires, dev->adc_sampling_period);
   return HRTIMER_RESTART;
@@ -127,11 +129,11 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
 int kw_adc_release(struct inode *inode, struct file *filp)
 {
   //Make sure, that daq_timer is already switched off
-  //hrtimer_cancel(adc_timer);
+  //hrtimer_cancel(&dev->adc_timer);
   //Make sure that the spi_messages are serviced
   while (atomic_read(&daq_flag)) {};
   //Now we can be sure, that the spi_messages are serviced
-  kfifo_free(&adc_kfifo);
+//   kfifo_free(&adc_kfifo);
   return 0;
 }
 
@@ -153,10 +155,8 @@ static int kw_adc_probe(struct spi_device *spi)
 	if (retval < 0) {
 	    printk(KERN_ALERT "<1> Nie udalo sie ustawic parametrow urzadzenia!\n");
 	    return retval;
-  	    
 	}
 	dev->adc_dev = spi;
-// 	dev->adc_dev = &spi->dev;
 	return 0;
 error:
 	return retval;
@@ -189,8 +189,8 @@ static long kw_adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 printk(KERN_ALERT "wywolano funkcje adc_ioctl()");
 
-struct max1202 *dev;
-dev = file->private_data;  
+//struct max1202 *dev;
+//dev = file->private_data;  
 if (dev == NULL)
     return -ENODEV;
 
@@ -215,20 +215,20 @@ switch(cmd){
      hrtimer_init(&dev->adc_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
      dev->adc_timer.function = adc_timer_proc;
      printk(KERN_ALERT "ustawiono okres probkowania: %lu", arg);
-     file->private_data = dev;
+     //file->private_data = dev;
      return 0; 
   
   case ADC_START:
     //adc_sampling_period = ktime_set(0, arg);
     hrtimer_start(&dev->adc_timer, dev->adc_sampling_period, HRTIMER_MODE_REL);
     printk(KERN_ALERT "rozpoczecie konwersji");
-    file->private_data = dev;
+    //file->private_data = dev;
     return 0;
     
    case ADC_STOP: //Stop acquisition
    hrtimer_cancel(&dev->adc_timer);
    printk(KERN_ALERT "koniec konwersji!");
-   file->private_data = dev;
+   //file->private_data = dev;
    return 0;
    
         return retval;  
@@ -238,7 +238,7 @@ return 0;
 }
 
 ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_t * offp)
-{
+{/*
   char tmp[4];
   int copied=0;
   int res;
@@ -247,16 +247,19 @@ ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_
   //Therefore we have to loop through the kfifo :-(
   if (count % 4) return -EINVAL; //only 4-byte access
   while(count>0) {
-    res=wait_event_interruptible(read_queue,kfifo_len(&adc_kfifo) >= 4);
+    res=wait_event_interruptible(read_queue,kfifo_len(adc_kfifo) >= 4);
     if(res) return res; //We have received a signal...
     count -= 4;
     
-    kfifo_out_spinlocked(&adc_kfifo, tmp, 4, &adc_kfifo_lock);
+    kfifo_out_spinlocked(adc_kfifo, tmp, 4, &adc_kfifo_lock);
     copy_to_user(buff+copied,tmp,4);
     //copy_to_user return copied bytes count
     copied+=4;
   }
+  
   return copied;
+*/
+  return 0;
 }
 
 const struct file_operations kw_adc_fops = {
@@ -269,47 +272,45 @@ const struct file_operations kw_adc_fops = {
 
 static void kw_adc_cleanup(void)
 {
-  kfree(adc_rx_buf);
-  kfree(adc_tx_buf);
-  
-  /* Usuwamy urządzenie z klasy */
-  if(my_dev && kw_adc_class) {
-    device_destroy(kw_adc_class,my_dev);
-  }
-  /* Usuwamy strukturę urządzenia z systemu*/
-  if(my_cdev) { 
-    cdev_del(my_cdev);
-    my_cdev=NULL;
-  }
-  /* Zwalniamy numer urządzenia */
-  if(my_dev) {
-    unregister_chrdev_region(my_dev, 1);
-  }
-  /* Wyrejestrowujemy klasę */
-  if(kw_adc_class) {
-    class_destroy(kw_adc_class);
-    kw_adc_class=NULL;
-  }
-  printk(KERN_ALERT "do widzenia");
-
+   printk("Sprzatam po sobie bom zabrudzil");
+   /* Usuwamy urządzenie z klasy */
+   if(my_dev && kw_adc_class) {
+     device_destroy(kw_adc_class,my_dev);
+   }
+   /* Usuwamy strukturę urządzenia z systemu*/
+   if(dev->my_cdev) { 
+     cdev_del(dev->my_cdev);
+     dev->my_cdev=NULL;
+   }
+   /* Zwalniamy numer urządzenia */
+   if(my_dev) {
+     unregister_chrdev_region(my_dev, 1);
+   }
+   /* Wyrejestrowujemy klasę */
+   if(kw_adc_class) {
+     class_destroy(kw_adc_class);
+     kw_adc_class=NULL;
+   }
+   printk(KERN_ALERT "do widzenia");
+   kfifo_free(&adc_kfifo);  
+   if(dev) {
+     kfree(dev);
+     dev = NULL;
+   }
 }
 
 static int kw_adc_init(void)
 {
   printk(KERN_ALERT "Init startuje!");
-  int res=0;
-  adc_rx_buf=kmalloc(3,GFP_KERNEL);
-  adc_tx_buf=kmalloc(3,GFP_KERNEL);
-  
-  adc_tx_buf[0] = 0x9f;
-  adc_tx_buf[1] = 0;
-  adc_tx_buf[2] = 0;
-  
-  struct max1202 *dev; 
+  int res=0; 
   dev = kmalloc(sizeof(*dev), GFP_KERNEL | __GFP_ZERO);
   if (!dev)
     return 0;  
   
+  dev->tx[0] = 0x9f;
+  dev->tx[1] = 0;
+  dev->tx[2] = 0;
+   
   /* Alokujemy numer urządzenia */
   res=alloc_chrdev_region(&my_dev, 0, 1, DEVICE_NAME);
   if(res) {
@@ -347,7 +348,17 @@ static int kw_adc_init(void)
     MAJOR(my_dev));
    printk(KERN_ALERT "Zaladowano moj modul");
    res = spi_register_driver(&spidev_kw_adc_driver);
-  return res;
+  
+    //todo sprawdzic czy nie byl juz otwarty
+  printk("alokowanie bufora kfifo");
+  int ret = kfifo_alloc(&adc_kfifo, FIFO_SIZE, GFP_KERNEL);//todo czy  nie wyciek pamieci
+  
+  if (ret) {
+    printk("nie udalo sie zaalokowac kfifo");
+    return ret;
+  }
+   
+   return res;
  err1:
   kw_adc_cleanup();
   return res;
