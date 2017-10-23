@@ -6,12 +6,12 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <linux/types.h>
 
-#define SPI_IOC_MAGIC			'k'
-/* Read / Write of SPI mode (SPI_MODE_0..SPI_MODE_3) (limited to 8 bits) */
-#define SPI_IOC_RD			_IOR(SPI_IOC_MAGIC, 1, __u8)
-#define SPI_IOC_WR			_IOW(SPI_IOC_MAGIC, 1, __u8)
-#define DEVICE_NAME "kw_adc"
+#define IOCTL_TYPE (253)
+#define ADC_SET		_IOW(IOCTL_TYPE, 1, unsigned long)
+#define ADC_START	_IOR(IOCTL_TYPE,2, __u8)
+#define ADC_STOP	_IO(IOCTL_TYPE,3)
 
 extern int errno;
   
@@ -23,11 +23,12 @@ int main(int argc, char* argv[]) {
     uint8_t bufor[3];
     const char *file_path;
   
-    if(argc == 1)
+//     if(argc == 1)
         file_path = dev;
-    else
-        file_path = argv[1];
+//     else
+//         file_path = argv[1];
   
+	
     int fd = open(file_path, O_RDWR);
   
     if(fd < 0) {
@@ -50,28 +51,54 @@ int main(int argc, char* argv[]) {
    011 - CH6 --> bf
    111 - CH7 --> ff
    */
-  
-    
-    while(1) {
     bufor[0] = 0x9f;
     bufor[1] = 0;
     bufor[2] = 0;
-      
-      int ret = ioctl(fd, SPI_IOC_RD, bufor);
-      
-      signed long value;
-      value = bufor[2] >> 3; 
-      value |= bufor[1] << 5;
-      float volt = value * lsb;
-	  
-      
-      printf("ret:%d  bufor:%d %d %d  wartosc: %f\n", ret, bufor[0], bufor[1], bufor[2], volt);
-      if(ret < 0) {
+    
+   int ret = 0;
+   
+      unsigned long sampling_period = 1000000000; 
+    //ustawiamy timer
+      ret = ioctl(fd, ADC_SET, sampling_period);
+      printf("ustawienie okresu probkowania: %lu \n", sampling_period);
+         if(ret < 0) {
 	
           printf("Value of errno: %d\n", errno);
           perror("open perror:");
       }
-      sleep(1);
-    }
+      //wlaczamy timer
+      ret = ioctl(fd, ADC_START, bufor);
+      printf("wlaczenie timera\n");
+      
+         if(ret < 0) {
+          printf("Value of errno: %d\n", errno);
+          perror("open perror:");
+      }
+     
+      printf("pomiar\n");
+      signed long value;
+      value = bufor[2] >> 3; 
+      value |= bufor[1] << 5;
+      float volt = value * lsb;  
+      
+      printf("ret:%d  bufor:%d %d %d  wartosc: %f\n", ret, bufor[0], bufor[1], bufor[2], volt);
+      
+      if(ret < 0) {
+	
+          printf("Value of errno: %d\n", errno);
+          perror("open perror:");
+    }  
+    
+    sleep(3);
+//     wylaczamy timer
+    ret = ioctl(fd, ADC_STOP, 0);
+    
+    printf("wylaczenie timera\n");
+    if(ret < 0) {
+          printf("Value of errno: %d\n", errno);
+          perror("open perror:");
+      }
+      
+    close(fd);
     return 0;
   }

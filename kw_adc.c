@@ -26,32 +26,77 @@
 #define SPI_IOC_WR			_IOW(SPI_IOC_MAGIC, 1, __u8)
 #define DEVICE_NAME "kw_adc"
 
-dev_t my_dev=0;
-struct cdev * my_cdev = NULL;
-#define PROC_BLOCK_SIZE (3*1024)
-static struct class *kw_adc_class = NULL;
 
-struct spi_device *spi_adc_dev = NULL;
+struct kw_adc {
 
-EXPORT_SYMBOL(spi_adc_dev);
+	struct spi_transfer	xfer[1];
+	struct spi_message	msg_buf[1];
+	spinlock_t		spi_lock;
+	struct spi_device	*spi;
+	struct device 		*spidev;
+	struct list_head	device_entry;
+	spinlock_t		adc_kfifo_lock;
+	struct hrtimer	   	daq_timer;
+	ktime_t		  	daq_sampling_period;
+	struct kfifo 		*adc_kfifo;
+	/* TX/RX buffers are NULL unless this device is open (users > 0) */
+	struct mutex		buf_lock;
+	u8			tx[3];
+	u8			rx[3];
+};
 
 static int kw_adc_open(struct inode *inode, struct file *file)
-{
+{       
+  struct kw_adc *dev;
+  int retval = 0;
+  int subminor;
+   
+  subminor = iminor(inode); 
+  
   printk(KERN_ALERT "wywolano funkcje kw_adc_open");
-  return 0;
+  dev = kmalloc(sizeof(*dev), GFP_KERNEL);
+  if (!dev){
+	retval = -ENODEV;
+	goto exit;
+  } 
+   
+/*  
+ if (dev->adc_kfifo) {
+    //Device is already opened
+    return -EINVAL;
+  }
+  dev->adc_kfifo = kfifo_alloc(10000, GFP_KERNEL, &adc_kfifo_lock);
+  if (!dev->adc_kfifo) {
+    return -ENOMEM;
+  }*/
+ 
+ /* save our object in the file's private structure */
+ file->private_data = dev;
+  
+exit:
+	return retval;  
 }
 
 static int kw_adc_release(struct inode *inode, struct file *file)
 {
-  printk(KERN_ALERT "no to na razie");
+  struct kw_adc *dev;
+  dev = file->private_data;
+	if (dev == NULL)
+		return -ENODEV;
   return 0;
 }
 
 static int kw_adc_probe(struct spi_device *spi)
 {	
-
-	printk(KERN_ALERT "Probe startuje!");
+     printk(KERN_ALERT "Probe startuje!\n");
+	struct kw_adc *dev;
+	
+	int err = 0;
 	int retval = -ENOMEM;
+	dev = kmalloc(sizeof(*dev), GFP_KERNEL);
+	if (!dev)
+		goto error;
+	
 	
 	spi->max_speed_hz = 2000000;
 	spi->bits_per_word = 8;
@@ -63,15 +108,74 @@ static int kw_adc_probe(struct spi_device *spi)
 	    return retval;
 	}
 	
-	/* Store the reference to the spi_device */
-	spi_adc_dev = spi;
+	dev->spi = spi;
+        dev->spi = &spi->dev;
+	dev->rx[0] = 0;
+	dev->rx[1] = 0;
+	dev->rx[2] = 0;
+	
+	dev->tx[0] = 0x9f;
+	dev->tx[1] = 0;
+	dev->tx[2] = 0;
+	
+	dev->xfer[0].rx_buf = &dev->rx[0];
+	dev->xfer[0].tx_buf = &dev->tx[0];
+	dev->xfer[0].len = 3;
+      
+        dev_set_drvdata(&spi->dev, dev);
+        dev_info(&spi->dev, "spi registered, item=0x%p\n", (void *)dev);
+	
+	spi_message_init(&dev->msg_buf[0]);
+	spi_message_add_tail(&dev->xfer[0], &dev->msg_buf[0]);
+
+	retval = spi_sync_transfer(dev, dev->msg_buf, 1);
+	printk(KERN_ALERT "wykonano transfer!");
+	printk("tx=%x %x %x\n", dev->tx[0], dev->tx[1], dev->tx[2]);
+	printk("rx=%x %x %x\n", dev->rx[0], dev->rx[1], dev->rx[2]);
+	
+	struct spi_transfer *t = kmalloc(sizeof(struct spi_transfer), GFP_KERNEL);
+	if(!t)
+	   goto error;
+	
+	//tablica transferow
+	struct spi_transfer *msg_buf = NULL;
+	
+	msg_buf = kmalloc(sizeof(struct spi_transfer), GFP_KERNEL);
+	if (!msg_buf)
+	    return -ENOMEM;
+	
+	
+	/* save our data pointer in this interface device */
+	spi_set_drvdata(spi, dev);
+	dev->spi = spi;
+	
+	spi_message_add_tail(&t, &msg_buf);
+	retval = spi_async(dev->spi, &dev->msg_buf);
+	
+	//wysylam do przestrzeni uzytkownika adres bufora
+	retval = __copy_to_user((uint8_t __user *)arg, rx, 3);
+	
+	printk(KERN_ALERT "wykonano transfer!");
+	printk("tx=%x %x %x\n",dev->tx[0], dev->tx[1], dev->tx[2]);
+	printk("rx=%x %x %x\n",dev->rx[0], dev->rx[1], dev->rx[2]);
+
+	printk(KERN_ALERT "wpisanie wartosci rx!");
 	return 0;
+
+	error:
+	if (dev)
+	  kfree(dev);
+	if(t)
+	  kfree(t);
+	if(msg_buf)
+	  kfree(msg_buf);
+	
+	return retval;
 }
 
 
 static int kw_adc_remove(struct spi_device *spi)
 {
-	spi_adc_dev = NULL;
 	dev_notice(&spi->dev, "remove() called\n");
 	return 0;
 }
@@ -93,10 +197,12 @@ static struct spi_driver spidev_kw_adc_driver = {
 
 static long kw_adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-printk(KERN_ALERT "wywolano funkcje adc_ioctl()");
 int retval = -ENOMEM;
 int err = 0;
+struct kw_adc *dev;
+printk(KERN_ALERT "wywolano funkcje adc_ioctl()");
 
+    
 if (_IOC_TYPE(cmd) != SPI_IOC_MAGIC)
 	return -ENOTTY;
 if (_IOC_DIR(cmd) & _IOC_READ)
@@ -105,51 +211,15 @@ else if (_IOC_DIR(cmd) & _IOC_WRITE)
 	err = !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
 if (err)
 	return -EFAULT;
-	
-	
+
+dev =file->private_data;
+if(!dev) { 
+    printk( KERN_NOTICE "Could not open device.");
+    return -ENOTTY;
+    }  
+    
 if (cmd == SPI_IOC_RD){
-	
-
-	//definicja struktury spi_transfer
-
-  
-	uint8_t* tx = kmalloc(3, GFP_KERNEL);
-	if(!tx)
-	   goto err;
-
-	printk(KERN_ALERT "alokacja tx!");
-	
-	uint8_t* rx = kmalloc(3, GFP_KERNEL);
-	if(!rx)
-	   goto err; 
-	
-	printk(KERN_ALERT "alokacja rx!");
-	
-	
-	tx[0] = 0x00;
-	tx[1] = 0x00;
-	tx[2] = 0x00;
-	printk(KERN_ALERT "wpisano wartosci do bufora tx!");
-	
-	rx[0] = 0x00;
-	rx[1] = 0x00;
-	rx[2] = 0x00;
-	printk(KERN_ALERT "wpisano wartosci do bufora rx!");
-	
-	struct spi_transfer *t = kmalloc(sizeof(struct spi_transfer), GFP_KERNEL);
-	if(!t)
-	   goto err;
-	
-	printk(KERN_ALERT "alokacja transferu!");
-	
-	//tablica transferow
-	struct spi_transfer *msg_buf = NULL;
-	
-	msg_buf = kmalloc(sizeof(struct spi_transfer), GFP_KERNEL);
-	if (!msg_buf)
-	    return -ENOMEM;
-	
-		
+	/*
 	msg_buf[0].tx_buf=tx;
 	printk(KERN_ALERT "wpisanie wartosci tx");
 	msg_buf[0].rx_buf=rx;
@@ -158,8 +228,8 @@ if (cmd == SPI_IOC_RD){
 	printk(KERN_ALERT "wpisanie wartosci len!");
 	
 	retval = __copy_from_user(tx, (uint8_t __user *)arg, 3);
-	
-	retval = spi_sync_transfer(spi_adc_dev, msg_buf, 1);
+	spi_message_add_tail(&t, &msg_buf);
+	retval = spi_async(dev->spi, &dev->msg_buf);
 	printk(KERN_ALERT "wykonano transfer!");
 	printk("tx=%x %x %x\n",tx[0], tx[1], tx[2]);
 	printk("rx=%x %x %x\n",rx[0], rx[1], rx[2]);
@@ -183,10 +253,6 @@ if (cmd == SPI_IOC_RD){
 	if (retval < 0) {
 	printk("spi_sync_transfer failed!\n");
 	
-	
-	
-	
-	
 	err:
 	  if(rx)
 	    kfree(rx);
@@ -199,11 +265,10 @@ if (cmd == SPI_IOC_RD){
 	
 	return -ENOMEM;
 	}
-	
+	*/
         return retval;  
 }
 
-	
 }
 
 const struct file_operations kw_adc_fops = {
@@ -213,78 +278,17 @@ const struct file_operations kw_adc_fops = {
 	.release	= kw_adc_release,
 };
 
-
 static void kw_adc_cleanup(void)
 {
-  /* Usuwamy urządzenie z klasy */
-  if(my_dev && kw_adc_class) {
-    device_destroy(kw_adc_class,my_dev);
-  }
-  /* Usuwamy strukturę urządzenia z systemu*/
-  if(my_cdev) { 
-    cdev_del(my_cdev);
-    my_cdev=NULL;
-  }
-  /* Zwalniamy numer urządzenia */
-  if(my_dev) {
-    unregister_chrdev_region(my_dev, 1);
-  }
-  /* Wyrejestrowujemy klasę */
-  if(kw_adc_class) {
-    class_destroy(kw_adc_class);
-    kw_adc_class=NULL;
-  }
   printk(KERN_ALERT "do widzenia");
-
 }
 
 static int kw_adc_init(void)
 {
-  printk(KERN_ALERT "Init startuje!");
   int res=0;
-
-  /* Alokujemy numer urządzenia */
-  res=alloc_chrdev_region(&my_dev, 0, 1, DEVICE_NAME);
-  if(res) {
-    printk (KERN_ALERT "Alocation of the device number for %s failed\n",
-            DEVICE_NAME);
-    return res; 
-  };
-  
-  /* Tworzymy klasę opisującą nasze urządzenie - aby móc współpracować z systemem udev */
-  kw_adc_class = class_create(THIS_MODULE, DEVICE_NAME);
-  if (IS_ERR(kw_adc_class)) {
-    printk(KERN_ERR "Error creating kw_adc_class.\n");
-    res=PTR_ERR(kw_adc_class);
-    goto err1;
-  }
-
-  
- /* Alokujemy strukturę opisującą urządzenie znakowe */
-  my_cdev = cdev_alloc();
-  my_cdev->ops = &kw_adc_fops;
-  my_cdev->owner = THIS_MODULE;
-  
-  /* Dodajemy urządzenie znakowe do systemu */
-  res=cdev_add(my_cdev, my_dev, 1);
-  if(res) {
-    printk (KERN_ALERT "Registration of the device number for %s failed\n",
-            DEVICE_NAME);
-    res=-EFAULT;
-    goto err1;
-  };
-  
-  device_create(kw_adc_class,NULL,my_dev,NULL,"%s%d", DEVICE_NAME, MINOR(my_dev));
-  printk (KERN_ALERT "%s The major device number is %d.\n",
- "Registeration is a success.",
-    MAJOR(my_dev));
-   printk(KERN_ALERT "Zaladowano moj modul");
+  printk(KERN_ALERT "Init startuje!");
    res = spi_register_driver(&spidev_kw_adc_driver);
   return res;
- err1:
-  kw_adc_cleanup();
-  return res;
-  
 }
 module_init(kw_adc_init);
 
@@ -295,8 +299,6 @@ static void __exit kw_adc_exit(void)
 }
 module_exit(kw_adc_exit);
 
-
-//MODULE_DEVICE_TABLE(of, of_match_ptr(spidev_dt_ids)); 
 /* Information about this module */
 MODULE_DESCRIPTION("Minimal SPI ADC driver");
 MODULE_AUTHOR("Krzysztof Wasilewski");
