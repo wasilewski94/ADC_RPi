@@ -39,21 +39,21 @@ DECLARE_WAIT_QUEUE_HEAD (read_queue);
 //ADC buffer kfifo
 struct kfifo adc_kfifo;
 DEFINE_SPINLOCK(adc_kfifo_lock);
-atomic_t daq_flag = ATOMIC_INIT(0);
+atomic_t adc_flag = ATOMIC_INIT(0);
 unsigned char *kfifo_buffer; 
 
 struct max1202 {
-  struct spi_transfer	   adc1_xfer[1];
-  struct spi_message	   adc1_msg[1];
+  struct spi_transfer	   adc1_xfer;
+  struct spi_message	   adc1_msg;
   struct cdev              *my_cdev;
-  u8			   tx[3];
-  u8			   rx[3];
+  u8			   *tx;
+  u8			   *rx;
   struct hrtimer 	   adc_timer;
   struct spi_device 	   *adc_dev;
   ktime_t  		   adc_sampling_period;
 //   struct kfifo 		   adc_kfifo; //It seems, that the buffer must be kmalloc allocated.
 };
-#define to_max1202_dev(d) container_of(d, struct max1202, dev)
+//#define to_max1202_dev(d) container_of(d, struct max1202, dev)
 
 struct max1202 *dev; // dev pointer
 
@@ -64,12 +64,8 @@ static struct class *kw_adc_class = NULL;
 int kw_adc_open(struct inode *inode, struct file *filp)
 {
   printk("funkcja open zostala wywolana");
- 
   hrtimer_init(&dev->adc_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-  
- //todo sprawdzic czy nie byl juz otwarty
-//   printk("alokowanie bufora kfifo");
-//     printk("udalo sie zaalokowac kfifo");
+
   return 0;
 }
 
@@ -77,20 +73,26 @@ int kw_adc_open(struct inode *inode, struct file *filp)
 void adc_complete(void * context)
 {
   printk("Debug: skonczony transfer spi\n");
-  if(atomic_dec_and_test(&daq_flag)) {
+  /*if(atomic_dec_and_test(&adc_flag)) {
+    if (1) printk("<1>status: %d %2.2x %2.2x %2.2x\n",
+      dev->adc1_msg.status,
+      (int) dev->rx[0], (int) dev->rx[1],
+      (int) dev->rx[2] );
     //If the result is zero, then both SPI messages are serviced
     //We may copy the results
     //I do not clean up the bits returned by MCP3201
     //The user application has to do it...
     //adc_buf[0] |= 0x80;
     if(dev->rx[0] != 0)
-      printk("MCP3201 error - first byte of transfer is not 0, ignoring results.");
+      printk("ADC error - first byte of transfer is not 0, ignoring results.");
     else {
-      kfifo_in(&adc_kfifo, (dev->rx+1), 2);
-    //We should check for the free space... I'll correct it later...
+      kfifo_put(&adc_kfifo, (dev->rx)[1]);
+      kfifo_put(&adc_kfifo, (dev->rx)[2]);
+      //We should check for the free space... I'll correct it later...
       wake_up_interruptible(&read_queue);
     }
   }
+*/
 }
 
 //HRtimer interrupt routine
@@ -103,17 +105,18 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
      return 0;
   
   //initialization of the spi_messages
-  spi_message_init(dev->adc1_msg);
-  memset(dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
-  dev->adc1_xfer->tx_buf  = dev->tx;
-  dev->adc1_xfer->rx_buf  = dev->rx;
-  dev->adc1_xfer->len = 3;
-  spi_message_add_tail(dev->adc1_xfer, dev->adc1_msg);
-  dev->adc1_msg->complete = adc_complete;
+  spi_message_init(&dev->adc1_msg);
+  dev->adc1_msg.is_dma_mapped = 0;
+  memset(&dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
+  dev->adc1_xfer.tx_buf  = dev->tx;
+  dev->adc1_xfer.rx_buf  = dev->rx;
+  dev->adc1_xfer.len = 3;
+  spi_message_add_tail(&dev->adc1_xfer, &dev->adc1_msg);
+  dev->adc1_msg.complete = adc_complete;
   //submission of the messages
-  spi_async(dev->adc_dev, dev->adc1_msg);
+  spi_async(dev->adc_dev, &(dev->adc1_msg));
   //mark the fact, that messages are submited
-  atomic_set(&daq_flag,1);
+  atomic_set(&adc_flag,0); //w przyszlosci jedynka
   //rearming of the timer
   hrtimer_forward(my_timer, my_timer->_softexpires, dev->adc_sampling_period);
   return HRTIMER_RESTART;
@@ -125,7 +128,7 @@ int kw_adc_release(struct inode *inode, struct file *filp)
   //Make sure, that daq_timer is already switched off
   hrtimer_try_to_cancel(&dev->adc_timer);
   //Make sure that the spi_messages are serviced
-  while (atomic_read(&daq_flag)) {};
+  while (atomic_read(&adc_flag)) {};
   //Now we can be sure, that the spi_messages are serviced
 //   kfifo_free(&adc_kfifo);
   return 0;
@@ -151,6 +154,7 @@ static int kw_adc_probe(struct spi_device *spi)
 	    return retval;
 	}
 	dev->adc_dev = spi;
+	printk("adres spi: %x i retval: %d", spi, retval);
 	return 0;
 error:
 	return retval;
@@ -231,22 +235,22 @@ return 0;
 
 ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_t * offp)
 {/*
-  char tmp[4];
+  char tmp[2];
   int copied=0;
   int res;
   //Unfortunately we do not have the userspace access to the kfifo data
   //I hope one day we will have kfifo_put_user in the mainstream kernel... ;-)
   //Therefore we have to loop through the kfifo :-(
-  if (count % 4) return -EINVAL; //only 4-byte access
+  if (count % 2) return -EINVAL; //only 2-byte access
   while(count>0) {
-    res=wait_event_interruptible(read_queue,kfifo_len(adc_kfifo) >= 4);
+    res=wait_event_interruptible(read_queue,kfifo_len(adc_kfifo) >= 2);
     if(res) return res; //We have received a signal...
-    count -= 4;
+    count -= 2;
     
-    kfifo_out_spinlocked(adc_kfifo, tmp, 4, &adc_kfifo_lock);
-    copy_to_user(buff+copied,tmp,4);
+    kfifo_out_spinlocked(adc_kfifo, tmp, 2, &adc_kfifo_lock);
+    copy_to_user(buff+copied,tmp,2);
     //copy_to_user return copied bytes count
-    copied+=4;
+    copied+=2;
   }
   
   return copied;
@@ -285,6 +289,10 @@ static void kw_adc_cleanup(void)
    }
    printk(KERN_ALERT "do widzenia");
    kfifo_free(&adc_kfifo);  
+   if(dev->tx || dev->rx){
+     kfree(dev->tx);
+     kfree(dev->rx);
+   }
    if(dev) {
      kfree(dev);
      dev = NULL;
@@ -298,6 +306,12 @@ static int kw_adc_init(void)
   dev = kmalloc(sizeof(*dev), GFP_KERNEL | __GFP_ZERO);
   if (!dev)
     return 0;  
+  
+  dev->tx = NULL;
+  dev->rx = NULL;
+  
+  dev->tx = kmalloc(3, GFP_KERNEL);
+  dev->rx = kmalloc(3, GFP_KERNEL);
   
   dev->tx[0] = 0x9f;
   dev->tx[1] = 0;
