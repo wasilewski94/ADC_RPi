@@ -36,20 +36,20 @@
 
 DECLARE_WAIT_QUEUE_HEAD (read_queue);
 
-//ADC buffer kfifo
+struct spi_device *spi_adc_dev; // global pointer to the spi_device
 struct kfifo adc_kfifo;
 DEFINE_SPINLOCK(adc_kfifo_lock);
 atomic_t adc_flag = ATOMIC_INIT(0);
 unsigned char *kfifo_buffer; 
 
 struct max1202 {
-  struct spi_transfer	   adc1_xfer;
-  struct spi_message	   adc1_msg;
+  struct spi_transfer	   *adc1_xfer;
+  struct spi_message	   *adc1_msg;
   struct cdev              *my_cdev;
   u8			   *tx;
   u8			   *rx;
   struct hrtimer 	   adc_timer;
-  struct spi_device 	   *adc_dev;
+  //struct spi_device 	   *spi_adc_dev;
   ktime_t  		   adc_sampling_period;
 //   struct kfifo 		   adc_kfifo; //It seems, that the buffer must be kmalloc allocated.
 };
@@ -69,11 +69,12 @@ int kw_adc_open(struct inode *inode, struct file *filp)
   return 0;
 }
 
+
 // SPI completion routines
 void adc_complete(void * context)
 {
-  printk("Debug: skonczony transfer spi\n");
-  /*if(atomic_dec_and_test(&adc_flag)) {
+  printk("Debug: skonczony transfer spi\n");/*
+  if(atomic_dec_and_test(&adc_flag)) {
     if (1) printk("<1>status: %d %2.2x %2.2x %2.2x\n",
       dev->adc1_msg.status,
       (int) dev->rx[0], (int) dev->rx[1],
@@ -86,13 +87,13 @@ void adc_complete(void * context)
     if(dev->rx[0] != 0)
       printk("ADC error - first byte of transfer is not 0, ignoring results.");
     else {
-      kfifo_put(&adc_kfifo, (dev->rx)[1]);
-      kfifo_put(&adc_kfifo, (dev->rx)[2]);
+      kfifo_in_spinlocked(&adc_kfifo, dev->rx, 2, &adc_kfifo_lock);
+//       kfifo_in_spinlocked(&adc_kfifo, dev->rx[2]);
       //We should check for the free space... I'll correct it later...
       wake_up_interruptible(&read_queue);
     }
   }
-*/
+*/  
 }
 
 //HRtimer interrupt routine
@@ -103,25 +104,39 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
   struct max1202 *dev = container_of(my_timer, struct max1202, adc_timer);
   if (dev == NULL)
      return 0;
-  
   //initialization of the spi_messages
-  spi_message_init(&dev->adc1_msg);
-  dev->adc1_msg.is_dma_mapped = 0;
-  memset(&dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
-  dev->adc1_xfer.tx_buf  = dev->tx;
-  dev->adc1_xfer.rx_buf  = dev->rx;
-  dev->adc1_xfer.len = 3;
-  spi_message_add_tail(&dev->adc1_xfer, &dev->adc1_msg);
-  dev->adc1_msg.complete = adc_complete;
+  spi_message_init(dev->adc1_msg);
+  dev->adc1_msg->is_dma_mapped = 0;
+  memset(dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
+  dev->adc1_xfer->tx_buf  = dev->tx;
+  dev->adc1_xfer->rx_buf  = dev->rx;
+  dev->adc1_xfer->len = 3;
+  spi_message_add_tail(dev->adc1_xfer, dev->adc1_msg);
+  dev->adc1_msg->complete = adc_complete;
   //submission of the messages
-  spi_async(dev->adc_dev, &(dev->adc1_msg));
+  printk("adres urzadzenia: spi_adc_dev %x", spi_adc_dev);
+  printk("adres adc1_msg: dev->adc1_msg %x", dev->adc1_msg);
+  spi_async(spi_adc_dev, dev->adc1_msg);
+  printk("tx=%x %x %x\n",dev->tx[0], dev->tx[1], dev->tx[2]);
+  printk("rx=%x %x %x\n",dev->rx[0], dev->rx[1], dev->rx[2]);
   //mark the fact, that messages are submited
   atomic_set(&adc_flag,0); //w przyszlosci jedynka
   //rearming of the timer
   hrtimer_forward(my_timer, my_timer->_softexpires, dev->adc_sampling_period);
   return HRTIMER_RESTART;
 } 
+/*
+int spi_async(struct spi_device *spi, struct spi_message *message)
+{
+	int ret=0;
+	return ret;
+}
 
+static int __spi_async(struct spi_device *spi, struct spi_message *message)
+{
+	return 0;
+}
+*/
 
 int kw_adc_release(struct inode *inode, struct file *filp)
 {
@@ -153,8 +168,10 @@ static int kw_adc_probe(struct spi_device *spi)
 	    printk(KERN_ALERT "<1> Nie udalo sie ustawic parametrow urzadzenia!\n");
 	    return retval;
 	}
-	dev->adc_dev = spi;
-	printk("adres spi: %x i retval: %d", spi, retval);
+	/* Store the reference to the spi_device */
+	spi_adc_dev = spi;
+	printk("adres spi: %x", spi);
+	printk("adres dev->spi_adc_dev: %x", spi_adc_dev);
 	return 0;
 error:
 	return retval;
@@ -191,7 +208,6 @@ printk(KERN_ALERT "wywolano funkcje adc_ioctl()");
 //dev = file->private_data;  
 if (dev == NULL)
     return -ENODEV;
-
 
 int retval=0;
 int err = 0;	
@@ -268,7 +284,7 @@ const struct file_operations kw_adc_fops = {
 
 static void kw_adc_cleanup(void)
 {
-   printk("Sprzatam po sobie bom zabrudzil");
+   printk("Sprzatam po sobie");
    /* Usuwamy urządzenie z klasy */
    if(my_dev && kw_adc_class) {
      device_destroy(kw_adc_class,my_dev);
@@ -288,7 +304,12 @@ static void kw_adc_cleanup(void)
      kw_adc_class=NULL;
    }
    printk(KERN_ALERT "do widzenia");
-   kfifo_free(&adc_kfifo);  
+   kfifo_free(&adc_kfifo);
+   if(dev->adc1_msg || dev->adc1_xfer){
+    kfree(dev->adc1_msg);
+    kfree(dev->adc1_xfer);
+   }
+   
    if(dev->tx || dev->rx){
      kfree(dev->tx);
      kfree(dev->rx);
@@ -307,9 +328,8 @@ static int kw_adc_init(void)
   if (!dev)
     return 0;  
   
-  dev->tx = NULL;
-  dev->rx = NULL;
-  
+  dev->adc1_xfer = kmalloc(sizeof(struct spi_transfer), GFP_KERNEL);
+  dev->adc1_msg = kmalloc(sizeof (struct spi_message), GFP_KERNEL);
   dev->tx = kmalloc(3, GFP_KERNEL);
   dev->rx = kmalloc(3, GFP_KERNEL);
   

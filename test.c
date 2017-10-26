@@ -20,16 +20,10 @@ static float lsb = 0.001;
 
  
 int main(int argc, char* argv[]) {
+    
     uint8_t bufor[3];
     const char *file_path;
-  
-//     if(argc == 1)
-        file_path = dev;
-//     else
-//         file_path = argv[1];
-  
-	
-    int fd = open(file_path, O_RDWR);
+    int fd = open(dev, O_RDWR);
   
     if(fd < 0) {
       printf("Cannot open device %s!%d\n", file_path, fd);
@@ -38,8 +32,8 @@ int main(int argc, char* argv[]) {
       exit(1);
     }
   
-    /*
-   * Pomiar single-ended i unipolar, wybor kanalu:
+  /*
+  Pomiar single-ended i unipolar, wybor kanalu:
   format komendy: 
   1XXX1111
    000 - CH0 --> 8f
@@ -51,7 +45,7 @@ int main(int argc, char* argv[]) {
    011 - CH6 --> bf
    111 - CH7 --> ff
    */
-    bufor[0] = 0x9f;
+    bufor[0] = 0x8f;
     bufor[1] = 0;
     bufor[2] = 0;
     
@@ -87,16 +81,12 @@ int main(int argc, char* argv[]) {
 	
           printf("Value of errno: %d\n", errno);
           perror("open perror:");
-    }  
-    int c = 5;
-    while(c--) {
-      putchar('.');
-      sleep(1);
-    }
+      }   
+    
+    sleep(100);
     putchar('\n');
-    printf("Skonczylem czekac\n");
-    fflush(stdout);
-//     wylaczamy timer
+
+    //     wylaczamy timer
     ret = ioctl(fd, ADC_STOP, 0);
     
     printf("wylaczenie timera\n");
