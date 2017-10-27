@@ -21,7 +21,7 @@ static float lsb = 0.001;
  
 int main(int argc, char* argv[]) {
     
-    uint8_t bufor[3];
+    uint8_t bufor[2];
     const char *file_path;
     int fd = open(dev, O_RDWR);
   
@@ -45,13 +45,14 @@ int main(int argc, char* argv[]) {
    011 - CH6 --> bf
    111 - CH7 --> ff
    */
-    bufor[0] = 0x8f;
+    bufor[0] = 0;
     bufor[1] = 0;
-    bufor[2] = 0;
     
    int ret = 0;
-   
-      unsigned long sampling_period = 1000000000; 
+   int res = 0;
+   unsigned long sampling_period = 10000000;
+      
+      
     //ustawiamy timer
       ret = ioctl(fd, ADC_SET, sampling_period);
       printf("ustawienie okresu probkowania: %lu \n", sampling_period);
@@ -68,24 +69,29 @@ int main(int argc, char* argv[]) {
           printf("Value of errno: %d\n", errno);
           perror("open perror:");
       }
-     
-      printf("pomiar\n");
-      signed long value;
-      value = bufor[2] >> 3; 
-      value |= bufor[1] << 5;
-      float volt = value * lsb;  
+      while(1){
+	
+	res = read(fd, bufor, 2);
       
-      printf("ret:%d  bufor:%d %d %d  wartosc: %f\n", ret, bufor[0], bufor[1], bufor[2], volt);
-      
+	signed long value;
+	value = bufor[1] >> 3; 
+	value |= bufor[0] << 5;
+	float volt = value * lsb;  
+	
+       
+	printf("ret:%d  bufor:%d %d wartosc: %f", ret, bufor[0], bufor[1], volt);
+	
       if(ret < 0) {
 	
           printf("Value of errno: %d\n", errno);
           perror("open perror:");
       }   
     
-    sleep(100);
+//     sleep(1);
     putchar('\n');
-
+      }
+      
+      
     //     wylaczamy timer
     ret = ioctl(fd, ADC_STOP, 0);
     
