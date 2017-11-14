@@ -1,7 +1,7 @@
 *.o
 *.ko
 *.symvers
-
+*.txt
 *.swp
 *.cmd
 *.order
