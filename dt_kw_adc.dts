@@ -1,4 +1,3 @@
-
 // Overlay for the spi_adc MAX1202
 /dts-v1/;
 /plugin/;
@@ -33,3 +32,4 @@
 			};
 		};
 	};
+};
