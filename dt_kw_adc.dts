@@ -1,0 +1,35 @@
+// Overlay for the spi_adc MAX1202
+/dts-v1/;
+/plugin/;
+
+/ {
+
+	compatible = "brcm,bcm2835";
+	
+	fragment@0 {
+		target = <&spidev0>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+	
+	fragment@1 {
+		target = <&spidev1>;
+		__overlay__ {
+			status = "disabled";	
+		};
+	};
+	
+	fragment@2 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+			kwaadc1: kw_adc@0{
+				compatible = "kw_adc";
+				reg = <0>; //CE0
+				spi-max-frequency = <2000000>;
+				status = "okay";
+			};
+		};
+	};
+};

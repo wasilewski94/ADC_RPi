@@ -36,21 +36,23 @@
 
 DECLARE_WAIT_QUEUE_HEAD (read_queue);
 
-struct spi_device *spi_adc_dev; // global pointer to the spi_device
+// struct spi_device *spi_adc_dev; // global pointer to the spi_device
 struct kfifo adc_kfifo;
 DEFINE_SPINLOCK(adc_kfifo_lock);
-atomic_t adc_flag = ATOMIC_INIT(0);
+atomic_t adc_flag = ATOMIC_INIT(1);
+atomic_t hrtimer_flag = ATOMIC_INIT(1);
 unsigned char *kfifo_buffer; 
+
 
 struct max1202 {
   struct spi_transfer	   *adc1_xfer;
   struct spi_message	   *adc1_msg;
   struct cdev              *my_cdev;
-  u8			   *tx;
-  u8			   *rx;
-  struct hrtimer 	   adc_timer;
-  //struct spi_device 	   *spi_adc_dev;
-  ktime_t  		   adc_sampling_period;
+  u8			           *tx;
+  u8			           *rx;
+  struct hrtimer 	       adc_timer;
+  struct spi_device 	   *spi_adc_dev;
+  ktime_t  		           adc_sampling_period;
 };
 
 struct max1202 *dev; // dev pointer
@@ -68,8 +70,10 @@ int kw_adc_open(struct inode *inode, struct file *filp)
 // SPI completion routines
 void adc_complete(void * context)
 {
-  printk("Debug: skonczony transfer spi\n");
   if(atomic_dec_and_test(&adc_flag)) {
+    int ret=0;
+//     printk("complete(),flaga: %d", adc_flag);  
+    printk("Debug: skonczony transfer spi\n");
     if (1) printk("<1>status: %d %2.2x %2.2x %2.2x\n",
       dev->adc1_msg->status,
       (int) dev->rx[0], (int) dev->rx[1],
@@ -79,21 +83,23 @@ void adc_complete(void * context)
     //I do not clean up the bits returned by MCP3201
     //The user application has to do it...
     if(dev->rx[0] != 0)
-      printk("ADC error - first byte of transfer is not 0, ignoring results.");
+      printk(KERN_ALERT "ADC error - first byte of transfer is not 0, ignoring results.");
     else {
-      kfifo_in_spinlocked(&adc_kfifo, ((dev->rx)+1), 2, &adc_kfifo_lock);
-//       kfifo_in_spinlocked(&adc_kfifo, dev->rx[2]);
+      ret = kfifo_in(&adc_kfifo, ((dev->rx)+1), 2);
+      printk(KERN_ALERT "dodano do kolejki %d bajtow", ret);
       //We should check for the free space... I'll correct it later...
       wake_up_interruptible(&read_queue);
     }
   } 
+      atomic_set(&hrtimer_flag, 1); //przerwanie zakonczone - ustawiam flage  
 }
 
 //HRtimer interrupt routine
 enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
 {
-  printk(KERN_ALERT "obsluga przerwania timera");  
-  
+  if(atomic_dec_and_test(&hrtimer_flag)) {  
+      
+//   printk(KERN_ALERT "Obsluga przerwania timera, flaga: %d", hrtimer_flag);
   struct max1202 *dev = container_of(my_timer, struct max1202, adc_timer);
   if (dev == NULL)
      return 0;
@@ -107,14 +113,20 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
   spi_message_add_tail(dev->adc1_xfer, dev->adc1_msg);
   dev->adc1_msg->complete = adc_complete;
   //submission of the messages
-  spi_async(spi_adc_dev, dev->adc1_msg);
-  printk("tx=%x %x %x\n",dev->tx[0], dev->tx[1], dev->tx[2]);
-  printk("rx=%x %x %x\n",dev->rx[0], dev->rx[1], dev->rx[2]);
+  spi_async(dev->spi_adc_dev, dev->adc1_msg);
+//   printk("tx=%x %x %x\n",dev->tx[0], dev->tx[1], dev->tx[2]);
+//   printk("rx=%x %x %x\n",dev->rx[0], dev->rx[1], dev->rx[2]);
   //mark the fact, that messages are submited
   atomic_set(&adc_flag, 1);
+//   printk(KERN_ALERT "po spi_async, flaga: %d", adc_flag);
   //rearming of the timer
   hrtimer_forward(my_timer, my_timer->_softexpires, dev->adc_sampling_period);
   return HRTIMER_RESTART;
+}
+  else{
+  printk(KERN_ALERT "Proba otwarcia przerwania przed zakonczeniem trwajacego, %d", hrtimer_flag);
+  return HRTIMER_NORESTART;
+  }
 } 
 
 
@@ -133,10 +145,6 @@ static int kw_adc_probe(struct spi_device *spi)
 {	
 	printk(KERN_ALERT "Probe startuje!");
 	int retval = -ENOMEM;
-	struct max1202 *dev;
-	dev = kmalloc(sizeof(*dev), GFP_KERNEL);
-	if (!dev)
-		goto error;
 
 	spi->max_speed_hz = 2000000;
 	spi->bits_per_word = 8;
@@ -148,10 +156,8 @@ static int kw_adc_probe(struct spi_device *spi)
 	    return retval;
 	}
 	/* Store the reference to the spi_device */
-	spi_adc_dev = spi;
+	dev->spi_adc_dev = spi;
 	return 0;
-error:
-	return retval;
 }
 
 static int kw_adc_remove(struct spi_device *spi)
@@ -181,8 +187,6 @@ static long kw_adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 printk(KERN_ALERT "wywolano funkcje adc_ioctl()");
 
-//struct max1202 *dev;
-//dev = file->private_data;  
 if (dev == NULL)
     return -ENODEV;
 
@@ -209,7 +213,7 @@ switch(cmd){
   
   case ADC_START:
     hrtimer_start(&dev->adc_timer, dev->adc_sampling_period, HRTIMER_MODE_REL);
-    printk(KERN_ALERT "Ustawienie okresu probkowania , konwersja rozpocznie sie w przerwaniu");
+    printk(KERN_ALERT "Start timera, konwersja rozpocznie sie w przerwaniu");
     return 0;
     
    case ADC_STOP: //Stop acquisition
@@ -227,7 +231,8 @@ ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_
 {
   char tmp[2];
   int copied=0;
-  int res;
+  int res=0;
+  int ret=0;
   //Unfortunately we do not have the userspace access to the kfifo data
   //I hope one day we will have kfifo_put_user in the mainstream kernel... ;-)
   //Therefore we have to loop through the kfifo :-(
@@ -235,14 +240,15 @@ ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_
   while(count>0) {
     res=wait_event_interruptible(read_queue, kfifo_len(&adc_kfifo) >= 2);
     if(res){ 
-      printk("nie ma jeszcze dwoch transferow w kolejce, czekam");
+      printk("nie ma jeszcze transferow w kolejce, czekam: %d", res);
       return res; //We have received a signal...
     }
     count -= 2;
     
-    kfifo_out_spinlocked(&adc_kfifo, tmp, 2, &adc_kfifo_lock);
+    ret = kfifo_out(&adc_kfifo, tmp, 2);
+    printk("pobrano z kolejki %d bajtow", ret);
     copy_to_user(buff+copied,tmp,2);
-    //copy_to_user return copied bytes count
+    //copy_to_user returns copied bytes count
     copied+=2;
   }
   
