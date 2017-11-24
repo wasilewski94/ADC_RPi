@@ -6,7 +6,6 @@
 #include <linux/errno.h>
 #include <linux/kref.h>
 #include <linux/of.h>
-#include <linux/module.h>
 #include <linux/unistd.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
@@ -19,7 +18,6 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 #include <linux/hrtimer.h>
-#include <linux/poll.h>
 #include <asm/atomic.h>
 #include <linux/kfifo.h>
 
@@ -41,11 +39,12 @@ struct kfifo adc_kfifo;
 DEFINE_SPINLOCK(adc_kfifo_lock);
 atomic_t adc_flag = ATOMIC_INIT(1);
 atomic_t hrtimer_flag = ATOMIC_INIT(1);
-unsigned char *kfifo_buffer; 
-
+//debugging mode
+int debug = 0;
 
 struct max1202 {
-  struct spi_transfer	   *adc1_xfer;
+  struct spi_transfer	   *adc1_xfer; 
+  struct spi_transfer	   *adc2_xfer;
   struct spi_message	   *adc1_msg;
   struct cdev              *my_cdev;
   u8			           *tx;
@@ -61,7 +60,8 @@ static struct class *kw_adc_class = NULL;
 
 int kw_adc_open(struct inode *inode, struct file *filp)
 {
-  printk("funkcja open zostala wywolana");
+  if (debug)
+    printk(KERN_ALERT "funkcja open zostala wywolana");
   hrtimer_init(&dev->adc_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
   return 0;
@@ -72,26 +72,22 @@ void adc_complete(void * context)
 {
   if(atomic_dec_and_test(&adc_flag)) {
     int ret=0;
-//     printk("complete(),flaga: %d", adc_flag);  
-    printk("Debug: skonczony transfer spi\n");
-    if (1) printk("<1>status: %d %2.2x %2.2x %2.2x\n",
-      dev->adc1_msg->status,
-      (int) dev->rx[0], (int) dev->rx[1],
-      (int) dev->rx[2] );
-    //If the result is zero, then both SPI messages are serviced
+    //If the result is zero, then both SPI messages are servcced
     //We may copy the results
     //I do not clean up the bits returned by MCP3201
     //The user application has to do it...
-    if(dev->rx[0] != 0)
-      printk(KERN_ALERT "ADC error - first byte of transfer is not 0, ignoring results.");
+    if(dev->rx[0] != 0){
+      if(debug)
+        printk(KERN_ALERT "ADC error - first byte of transfer is not 0, ignoring results.");
+    }
     else {
       ret = kfifo_in(&adc_kfifo, ((dev->rx)+1), 2);
-      printk(KERN_ALERT "dodano do kolejki %d bajtow", ret);
+      if(debug)
+        printk(KERN_ALERT "dodano do kolejki %d bajtow", ret);
       //We should check for the free space... I'll correct it later...
       wake_up_interruptible(&read_queue);
     }
   } 
-      atomic_set(&hrtimer_flag, 1); //przerwanie zakonczone - ustawiam flage  
 }
 
 //HRtimer interrupt routine
@@ -99,33 +95,44 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
 {
   if(atomic_dec_and_test(&hrtimer_flag)) {  
       
-//   printk(KERN_ALERT "Obsluga przerwania timera, flaga: %d", hrtimer_flag);
   struct max1202 *dev = container_of(my_timer, struct max1202, adc_timer);
   if (dev == NULL)
      return 0;
+  if(debug)
+    printk(KERN_ALERT "Obsluga przerwania timera, flaga: %d", hrtimer_flag);
   //initialization of the spi_messages
   spi_message_init(dev->adc1_msg);
   dev->adc1_msg->is_dma_mapped = 0;
   memset(dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
-  dev->adc1_xfer->tx_buf  = dev->tx;
-  dev->adc1_xfer->rx_buf  = dev->rx;
+//   memset(dev->adc2_xfer, 0, sizeof(dev->adc2_xfer));
+  dev->adc1_xfer->tx_buf = dev->tx;
+  dev->adc1_xfer->rx_buf = dev->rx;
   dev->adc1_xfer->len = 3;
+//   dev->adc1_xfer->cs_change = 1;
+//   dev->adc1_xfer->delay_usecs = 10;
+
+//   dev->adc2_xfer->tx_buf  = dev->tx;
+//   dev->adc2_xfer->rx_buf  = dev->rx;
+//   dev->adc2_xfer->len = 3;
   spi_message_add_tail(dev->adc1_xfer, dev->adc1_msg);
+//   spi_message_add_tail(dev->adc2_xfer, dev->adc2_msg);
   dev->adc1_msg->complete = adc_complete;
   //submission of the messages
   spi_async(dev->spi_adc_dev, dev->adc1_msg);
-//   printk("tx=%x %x %x\n",dev->tx[0], dev->tx[1], dev->tx[2]);
-//   printk("rx=%x %x %x\n",dev->rx[0], dev->rx[1], dev->rx[2]);
   //mark the fact, that messages are submited
   atomic_set(&adc_flag, 1);
-//   printk(KERN_ALERT "po spi_async, flaga: %d", adc_flag);
-  //rearming of the timer
+  if (debug){
+    printk("tx=%x %x %x\n",dev->tx[0], dev->tx[1], dev->tx[2]);
+    printk("rx=%x %x %x\n",dev->rx[0], dev->rx[1], dev->rx[2]);
+  }
   hrtimer_forward(my_timer, my_timer->_softexpires, dev->adc_sampling_period);
+  atomic_set(&hrtimer_flag, 1); //przerwanie zakonczone - ustawiam flage  
   return HRTIMER_RESTART;
 }
   else{
-  printk(KERN_ALERT "Proba otwarcia przerwania przed zakonczeniem trwajacego, %d", hrtimer_flag);
-  return HRTIMER_NORESTART;
+  if (debug)
+    printk(KERN_ALERT "Proba otwarcia przerwania przed zakonczeniem trwajacego, %d", hrtimer_flag);
+  return HRTIMER_RESTART;
   }
 } 
 
@@ -185,8 +192,6 @@ static struct spi_driver spidev_kw_adc_driver = {
 
 static long kw_adc_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-printk(KERN_ALERT "wywolano funkcje adc_ioctl()");
-
 if (dev == NULL)
     return -ENODEV;
 
@@ -208,17 +213,20 @@ switch(cmd){
   case ADC_SET: //Set sampling frequency
      dev->adc_sampling_period =  ktime_set(0, arg);
      dev->adc_timer.function = adc_timer_proc;
-     printk(KERN_ALERT "ustawiono okres probkowania: %lu", arg);
+     if(debug)
+       printk(KERN_ALERT "ustawiono okres probkowania: %lu", arg);
      return 0; 
   
   case ADC_START:
     hrtimer_start(&dev->adc_timer, dev->adc_sampling_period, HRTIMER_MODE_REL);
-    printk(KERN_ALERT "Start timera, konwersja rozpocznie sie w przerwaniu");
+    if(debug)
+      printk(KERN_ALERT "Start timera, konwersja rozpocznie sie w przerwaniu");
     return 0;
     
    case ADC_STOP: //Stop acquisition
    hrtimer_try_to_cancel(&dev->adc_timer);
-   printk(KERN_ALERT "koniec konwersji!");
+   if(debug)
+     printk(KERN_ALERT "koniec konwersji!");
    return 0;
    
         return retval;  
@@ -229,33 +237,38 @@ return 0;
 
 ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_t * offp)
 {
-  char tmp[2];
+//   char tmp[2];
   int copied=0;
   int res=0;
   int ret=0;
-  //Unfortunately we do not have the userspace access to the kfifo data
-  //I hope one day we will have kfifo_put_user in the mainstream kernel... ;-)
-  //Therefore we have to loop through the kfifo :-(
+
   if (count % 2) return -EINVAL; //only 2-byte access
   while(count>0) {
     res=wait_event_interruptible(read_queue, kfifo_len(&adc_kfifo) >= 2);
-    if(res){ 
-      printk("nie ma jeszcze transferow w kolejce, czekam: %d", res);
+    if(res){
+      if(debug)  
+        printk("nie ma jeszcze transferow w kolejce, czekam: %d", res);
       return res; //We have received a signal...
     }
     count -= 2;
-    
-    ret = kfifo_out(&adc_kfifo, tmp, 2);
-    printk("pobrano z kolejki %d bajtow", ret);
-    copy_to_user(buff+copied,tmp,2);
-    //copy_to_user returns copied bytes count
-    copied+=2;
+    kfifo_to_user(&adc_kfifo, buff, 2, &copied);
+    if(debug)
+      printk("pobrano z kolejki %d bajtow", copied);
   }
   
   return copied;
 
-  return 0;
+  return
+  0;
 }
+
+// unsigned int kw_adc_poll(struct file *filp,poll_table *wait)
+// {
+//   unsigned int mask =0;
+//   poll_wait(filp,&read_queue,wait);
+//   if(kfifo_len(adc_kfifo)>=2) mask |= POLLIN |POLLRDNORM;
+//   return mask;
+// }
 
 const struct file_operations kw_adc_fops = {
 	.owner		= THIS_MODULE,
@@ -263,6 +276,7 @@ const struct file_operations kw_adc_fops = {
 	.read           = kw_adc_read,
 	.open		= kw_adc_open,
 	.release	= kw_adc_release,
+//     .poll       = kw_adc_poll,
 };
 
 static void kw_adc_cleanup(void)
@@ -356,14 +370,15 @@ static int kw_adc_init(void)
  "Registeration is a success.",
     MAJOR(my_dev));
    printk(KERN_ALERT "Zaladowano moj modul");
+   
    res = spi_register_driver(&spidev_kw_adc_driver);
   
     //todo sprawdzic czy nie byl juz otwarty
-  printk("alokowanie bufora kfifo");
+  printk(KERN_ALERT "alokowanie bufora kfifo");
   int ret = kfifo_alloc(&adc_kfifo, FIFO_SIZE, GFP_KERNEL);//todo czy  nie wyciek pamieci
   
-  if (ret) {
-    printk("nie udalo sie zaalokowac kfifo");
+  if (ret != 0) {
+    printk(KERN_ALERT "nie udalo sie zaalokowac kfifo");
     return ret;
   }
    
@@ -371,7 +386,6 @@ static int kw_adc_init(void)
  err1:
   kw_adc_cleanup();
   return res;
-  
 }
 module_init(kw_adc_init);
 

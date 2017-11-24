@@ -22,8 +22,8 @@ static float lsb = 0.001;
 FILE *plik;
 
 //timestamp
-
 unsigned long time_stamp = 0;
+unsigned long time_stamp_2 = 0;
 
 long getMicrotime(){
 	struct timeval currentTime;
@@ -85,6 +85,7 @@ int main(int argc, char* argv[]) {
       }
       //wlaczamy timer
       ret = ioctl(fd, ADC_START, 0);
+      time_stamp = getMicrotime(); //zapisuje timestamp
       printf("wlaczenie timera\n");
       
          if(ret < 0) {
@@ -95,20 +96,21 @@ int main(int argc, char* argv[]) {
 	
     //pobieram dane
 	res = read(fd, bufor, 2);
+//     time_stamp_2 = getMicrotime();
     //zapisuje timestamp
-    time_stamp = getMicrotime();
-    
 	signed long value;
 	value = bufor[1] >> 3; 
 	value |= bufor[0] << 5;
-	float volt = value * lsb;  
-	printf("%lu  bufor:%d %d wartosc: %f\n", time_stamp, bufor[0], bufor[1], volt);
-    fflush(stdout);
+// 	float volt = value * lsb;  
+// 	printf("Ts = %luus fs = %luHz", time_stamp_2-time_stamp, 1000000/(time_stamp_2-time_stamp)); 
+// 	printf("bufor:%d %d wartosc: %f\n", bufor[0], bufor[1], volt);
+//     fflush(stdout);
     
-    fprintf(plik, "%lu  bufor:%d %d wartosc: %f\n", time_stamp, bufor[0], bufor[1], volt);
-    fflush(plik);
+//     fprintf(plik, "%lu  bufor:%d %d wartosc: %f\n", time_stamp, bufor[0], bufor[1], volt);
+//     fflush(plik);
+//     time_stamp = time_stamp_2;
     
-    sleep(1);
+//     sleep(1);
       }
       
     //     wylaczamy timer
