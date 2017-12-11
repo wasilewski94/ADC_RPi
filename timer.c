@@ -40,7 +40,7 @@ DEFINE_SPINLOCK(adc_kfifo_lock);
 atomic_t adc_flag = ATOMIC_INIT(1);
 atomic_t hrtimer_flag = ATOMIC_INIT(1);
 //debugging mode
-int debug = 0;
+int debug = 1;
 
 struct max1202 {
   struct spi_transfer	   *adc1_xfer; 
@@ -72,24 +72,13 @@ void adc_complete(void * context)
 {
   if(atomic_dec_and_test(&adc_flag)) {
     int ret=0;
-    //If the result is zero, then both SPI messages are servcced
-    //We may copy the results
-    //I do not clean up the bits returned by MCP3201
-    //The user application has to do it...
-    if(dev->rx[0] != 0){
-      if(debug)
-        printk(KERN_ALERT "ADC error - first byte of transfer is not 0, ignoring results.");
-    }
-    else {
-      ret = kfifo_in(&adc_kfifo, ((dev->rx)+1), 2);
-      if(debug)
+    ret = kfifo_in(&adc_kfifo, ((dev->rx)+1), 2);
+    if(debug)
         printk(KERN_ALERT "dodano do kolejki %d bajtow", ret);
-      //We should check for the free space... I'll correct it later...
-      wake_up_interruptible(&read_queue);
-    }
-  } 
+    //We should check for the free space... I'll correct it later...
+    wake_up_interruptible(&read_queue); 
+  }
 }
-
 //HRtimer interrupt routine
 enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
 {
@@ -104,21 +93,13 @@ enum hrtimer_restart adc_timer_proc(struct hrtimer *my_timer)
   spi_message_init(dev->adc1_msg);
   dev->adc1_msg->is_dma_mapped = 0;
   memset(dev->adc1_xfer, 0, sizeof(dev->adc1_xfer));
-//   memset(dev->adc2_xfer, 0, sizeof(dev->adc2_xfer));
   dev->adc1_xfer->tx_buf = dev->tx;
   dev->adc1_xfer->rx_buf = dev->rx;
   dev->adc1_xfer->len = 3;
-//   dev->adc1_xfer->cs_change = 1;
-//   dev->adc1_xfer->delay_usecs = 10;
-
-//   dev->adc2_xfer->tx_buf  = dev->tx;
-//   dev->adc2_xfer->rx_buf  = dev->rx;
-//   dev->adc2_xfer->len = 3;
   spi_message_add_tail(dev->adc1_xfer, dev->adc1_msg);
-//   spi_message_add_tail(dev->adc2_xfer, dev->adc2_msg);
   dev->adc1_msg->complete = adc_complete;
   //submission of the messages
-  spi_async(dev->spi_adc_dev, dev->adc1_msg);
+  spi_async_locked(dev->spi_adc_dev, dev->adc1_msg);
   //mark the fact, that messages are submited
   atomic_set(&adc_flag, 1);
   if (debug){
@@ -258,8 +239,7 @@ ssize_t kw_adc_read (struct file * filp, char __user * buff, size_t count, loff_
   
   return copied;
 
-  return
-  0;
+  return 0;
 }
 
 // unsigned int kw_adc_poll(struct file *filp,poll_table *wait)

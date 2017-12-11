@@ -95,20 +95,19 @@ int main(int argc, char* argv[]) {
       while(1){
 	
     //pobieram dane
-	res = read(fd, bufor, 2);
-//     time_stamp_2 = getMicrotime();
+     res = read(fd, bufor, 2);
+     time_stamp_2 = getMicrotime();
     //zapisuje timestamp
 	signed long value;
 	value = bufor[1] >> 3; 
 	value |= bufor[0] << 5;
-// 	float volt = value * lsb;  
-// 	printf("Ts = %luus fs = %luHz", time_stamp_2-time_stamp, 1000000/(time_stamp_2-time_stamp)); 
-// 	printf("bufor:%d %d wartosc: %f\n", bufor[0], bufor[1], volt);
-//     fflush(stdout);
-    
-//     fprintf(plik, "%lu  bufor:%d %d wartosc: %f\n", time_stamp, bufor[0], bufor[1], volt);
-//     fflush(plik);
-//     time_stamp = time_stamp_2;
+ 	float volt = value * lsb;  
+ 	printf("Ts = %luus fs = %luHz", time_stamp_2-time_stamp, 1000000/(time_stamp_2-time_stamp)); 
+ 	printf("bufor:%d %d wartosc: %f\n", bufor[0], bufor[1], volt);
+     fflush(stdout);    
+     fprintf(plik, "%lu, %f\n", time_stamp, volt);
+     fflush(plik);
+     time_stamp = time_stamp_2;
     
 //     sleep(1);
       }
